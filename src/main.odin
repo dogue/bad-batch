@@ -13,14 +13,25 @@ INDICES_PER_SPRITE :: 6
 
 Vec2 :: [2]f32
 Vec3 :: [3]f32
+Vec4 :: [4]f32
+
+Entity :: struct {
+    using _: Sprite,
+    update_proc: proc(^Entity),
+}
+
+GameState :: struct {
+    entities: [dynamic]Entity,
+}
 
 BatchVertex :: struct {
     pos: Vec2,
-    color: Vec3,
+    color: Vec4,
     world_pos: Vec2,
     world_rot: f32,
     world_scale: Vec2,
     aspect_ratio: f32,
+    outline: Vec4,
 }
 
 Renderer :: struct {
@@ -42,10 +53,18 @@ Sprite :: struct {
     pos: Vec2,
     rot: f32,
     scale: Vec2,
-    color: Vec3,
+    color: Vec4,
+    debug: bool,
 }
 
 renderer: Renderer
+
+spin :: proc(e: ^Entity) {
+    e.rot = total_time
+}
+
+update :: proc(gs: ^GameState) {
+}
 
 init_renderer :: proc() {
     renderer.vertex_buffer = sg.make_buffer(sg.Buffer_Desc{
@@ -75,11 +94,24 @@ init_renderer :: proc() {
         layout = {
             attrs = {
                 ATTR_simple_position = { format = .FLOAT2 },
-                ATTR_simple_color0 = { format = .FLOAT3 },
+                ATTR_simple_color0 = { format = .FLOAT4 },
                 ATTR_simple_world_pos = { format = .FLOAT2 },
                 ATTR_simple_world_rot = { format = .FLOAT },
                 ATTR_simple_world_scale = { format = .FLOAT2 },
                 ATTR_simple_aspect_ratio = { format = .FLOAT },
+                ATTR_simple_outline0 = { format = .FLOAT4 },
+            }
+        },
+        colors = {
+            0 = {
+                blend = {
+                    enabled = true,
+                    src_factor_rgb = .SRC_ALPHA,
+                    dst_factor_rgb = .ONE_MINUS_SRC_ALPHA,
+                    op_rgb = .ADD,
+                    src_factor_alpha = .ONE,
+                    dst_factor_alpha = .ONE_MINUS_SRC_ALPHA,
+                }
             }
         },
         index_type = .UINT16,
@@ -99,6 +131,13 @@ push_sprite :: proc(sprite: Sprite) {
     if renderer.vertex_count >= MAX_SPRITES * VERTICES_PER_SPRITE do return
 
     offset := renderer.vertex_count
+    outline: Vec4
+
+    if sprite.debug {
+        outline = {1, 0, 1, 1}
+    } else {
+        outline = {0, 0, 0, 0}
+    }
 
      renderer.vertices[offset] = BatchVertex{
         pos = {-0.5, -0.5},
@@ -107,6 +146,7 @@ push_sprite :: proc(sprite: Sprite) {
         world_rot = sprite.rot,
         world_scale = sprite.scale,
         aspect_ratio = renderer.aspect_ratio,
+        outline = outline,
     }
 
      renderer.vertices[offset + 1] = BatchVertex{
@@ -116,6 +156,7 @@ push_sprite :: proc(sprite: Sprite) {
         world_rot = sprite.rot,
         world_scale = sprite.scale,
         aspect_ratio = renderer.aspect_ratio,
+        outline = outline,
     }
 
      renderer.vertices[offset + 2] = BatchVertex{
@@ -125,6 +166,7 @@ push_sprite :: proc(sprite: Sprite) {
         world_rot = sprite.rot,
         world_scale = sprite.scale,
         aspect_ratio = renderer.aspect_ratio,
+        outline = outline,
     }
 
      renderer.vertices[offset + 3] = BatchVertex{
@@ -134,6 +176,7 @@ push_sprite :: proc(sprite: Sprite) {
         world_rot = sprite.rot,
         world_scale = sprite.scale,
         aspect_ratio = renderer.aspect_ratio,
+        outline = outline,
     }
 
     renderer.vertex_count += 4
@@ -179,29 +222,28 @@ event :: proc "c" (evt: ^sapp.Event) {
     }
 }
 
+total_time: f32
+
 frame :: proc "c" () {
     context = runtime.default_context()
+
+    total_time += f32(sapp.frame_duration())
+    game := cast(^GameState)sapp.userdata()
+    update(game)
 
     sg.begin_pass({ action = renderer.pass_action, swapchain = sglue.swapchain() })
     sg.apply_pipeline(renderer.pip)
     sg.apply_bindings(renderer.bind)
 
     begin_batch()
-
-    push_sprite(Sprite{
-        pos = {0, 0},
-        rot = 0,
-        scale = {0.2, 0.2},
-        color = {1, 0, 0},
-    })
-
-    push_sprite(Sprite{
-        pos = {0.5, 0.3},
-        rot = 0,
-        scale = {0.1, 0.1},
-        color = {0, 1, 0},
-    })
-
+    
+    for &e in game.entities {
+        if e.update_proc != nil {
+            e->update_proc()
+        }
+        push_sprite(e)
+    }
+    
     end_batch()
 
     sg.end_pass()
@@ -214,6 +256,18 @@ cleanup :: proc "c" () {
 }
 
 main :: proc() {
+    gs: GameState
+    gs.entities = make([dynamic]Entity)
+
+    append(&gs.entities, Entity{
+        scale = {0.5, 0.5},
+        color = {1, 1, 1, 1},
+        debug = true,
+        update_proc = proc(e: ^Entity) {
+            e.rot = total_time
+        },
+    })
+
     sapp.run({
         init_cb = init,
         frame_cb = frame,
@@ -222,5 +276,6 @@ main :: proc() {
         width = 800,
         height = 600,
         window_title = "Batched Rendering",
+        user_data = &gs,
     })
 }
